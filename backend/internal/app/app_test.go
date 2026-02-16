@@ -182,6 +182,32 @@ func TestWebSocketPingAndInvalidAction(t *testing.T) {
 	}
 }
 
+func TestCORSPreflight(t *testing.T) {
+	a := New()
+	ts := httptest.NewServer(a.Routes())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodOptions, ts.URL+"/api/rooms", nil)
+	if err != nil {
+		t.Fatalf("create request failed: %v", err)
+	}
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("options request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("unexpected allow origin: %s", got)
+	}
+}
+
 func readUntilType(t *testing.T, conn *websocket.Conn, want string) (wsMessage, error) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

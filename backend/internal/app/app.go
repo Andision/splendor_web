@@ -40,7 +40,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/rooms", a.handleRooms)
 	mux.HandleFunc("/api/rooms/", a.handleRoomByID)
 	mux.HandleFunc("/ws", a.handleWS)
-	return mux
+	return withCORS(mux)
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -127,7 +127,7 @@ func parseRoomPath(path string) (roomID string, resource string) {
 		return "", ""
 	}
 
-	roomID = strings.ToUpper(parts[0])
+	roomID = strings.TrimSpace(parts[0])
 	if len(parts) > 1 {
 		resource = strings.ToLower(parts[1])
 	}
@@ -225,7 +225,7 @@ type wsClientMessage struct {
 }
 
 func (a *App) handleWS(w http.ResponseWriter, r *http.Request) {
-	roomID := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("roomId")))
+	roomID := strings.TrimSpace(r.URL.Query().Get("roomId"))
 	playerID := strings.TrimSpace(r.URL.Query().Get("playerId"))
 	if roomID == "" || playerID == "" {
 		writeError(w, http.StatusBadRequest, "invalid_query", "roomId and playerId are required")
@@ -263,7 +263,9 @@ func (a *App) handleWS(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	a.broadcastRoomSnapshot(roomID, room, "player_connected")
+	if latestRoom, e := a.store.GetRoom(roomID); e == nil {
+		a.broadcastRoomSnapshot(roomID, latestRoom, "player_connected")
+	}
 
 	for {
 		var msg wsClientMessage
@@ -349,4 +351,24 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

@@ -38,6 +38,7 @@ type Player struct {
 
 type Room struct {
 	ID         string      `json:"id"`
+	Code       string      `json:"code"`
 	HostID     string      `json:"hostId"`
 	Status     RoomStatus  `json:"status"`
 	Players    []Player    `json:"players"`
@@ -49,6 +50,7 @@ type Room struct {
 
 type roomEntity struct {
 	ID         string
+	Code       string
 	HostID     string
 	Status     RoomStatus
 	Players    []Player
@@ -59,12 +61,16 @@ type roomEntity struct {
 }
 
 type Store struct {
-	mu    sync.RWMutex
-	rooms map[string]*roomEntity
+	mu       sync.RWMutex
+	rooms    map[string]*roomEntity
+	codeToID map[string]string
 }
 
 func NewStore() *Store {
-	return &Store{rooms: make(map[string]*roomEntity)}
+	return &Store{
+		rooms:    make(map[string]*roomEntity),
+		codeToID: make(map[string]string),
+	}
 }
 
 func (s *Store) CreateRoom(hostName string) *Room {
@@ -72,9 +78,11 @@ func (s *Store) CreateRoom(hostName string) *Room {
 	defer s.mu.Unlock()
 
 	roomID := randomCode(6)
+	roomCode := randomRoomCode(s.codeToID)
 	host := Player{ID: randomCode(8), Name: strings.TrimSpace(hostName)}
 	room := &roomEntity{
 		ID:        roomID,
+		Code:      roomCode,
 		HostID:    host.ID,
 		Status:    RoomWaiting,
 		Players:   []Player{host},
@@ -82,14 +90,15 @@ func (s *Store) CreateRoom(hostName string) *Room {
 	}
 
 	s.rooms[roomID] = room
+	s.codeToID[roomCode] = roomID
 	return snapshotRoom(room)
 }
 
-func (s *Store) JoinRoom(roomID, playerName string) (*Room, Player, error) {
+func (s *Store) JoinRoom(roomRef, playerName string) (*Room, Player, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	room, ok := s.rooms[strings.ToUpper(strings.TrimSpace(roomID))]
+	room, ok := s.resolveRoomLocked(roomRef)
 	if !ok {
 		return nil, Player{}, ErrRoomNotFound
 	}
@@ -112,11 +121,11 @@ func (s *Store) JoinRoom(roomID, playerName string) (*Room, Player, error) {
 	return snapshotRoom(room), player, nil
 }
 
-func (s *Store) StartGame(roomID, playerID string) (*Room, error) {
+func (s *Store) StartGame(roomRef, playerID string) (*Room, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	room, ok := s.rooms[strings.ToUpper(strings.TrimSpace(roomID))]
+	room, ok := s.resolveRoomLocked(roomRef)
 	if !ok {
 		return nil, ErrRoomNotFound
 	}
@@ -147,11 +156,11 @@ func (s *Store) StartGame(roomID, playerID string) (*Room, error) {
 	return snapshotRoom(room), nil
 }
 
-func (s *Store) ApplyAction(roomID, playerID string, action game.Action) (*Room, error) {
+func (s *Store) ApplyAction(roomRef, playerID string, action game.Action) (*Room, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	room, ok := s.rooms[strings.ToUpper(strings.TrimSpace(roomID))]
+	room, ok := s.resolveRoomLocked(roomRef)
 	if !ok {
 		return nil, ErrRoomNotFound
 	}
@@ -176,11 +185,11 @@ func (s *Store) ApplyAction(roomID, playerID string, action game.Action) (*Room,
 	return snapshotRoom(room), nil
 }
 
-func (s *Store) SetConnected(roomID, playerID string, connected bool) error {
+func (s *Store) SetConnected(roomRef, playerID string, connected bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	room, ok := s.rooms[strings.ToUpper(strings.TrimSpace(roomID))]
+	room, ok := s.resolveRoomLocked(roomRef)
 	if !ok {
 		return ErrRoomNotFound
 	}
@@ -192,15 +201,30 @@ func (s *Store) SetConnected(roomID, playerID string, connected bool) error {
 	return nil
 }
 
-func (s *Store) GetRoom(roomID string) (*Room, error) {
+func (s *Store) GetRoom(roomRef string) (*Room, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	room, ok := s.rooms[strings.ToUpper(strings.TrimSpace(roomID))]
+	room, ok := s.resolveRoomLocked(roomRef)
 	if !ok {
 		return nil, ErrRoomNotFound
 	}
 	return snapshotRoom(room), nil
+}
+
+func (s *Store) resolveRoomLocked(roomRef string) (*roomEntity, bool) {
+	key := strings.TrimSpace(roomRef)
+	if key == "" {
+		return nil, false
+	}
+	if room, ok := s.rooms[key]; ok {
+		return room, true
+	}
+	if id, ok := s.codeToID[strings.ToLower(key)]; ok {
+		room, ok := s.rooms[id]
+		return room, ok
+	}
+	return nil, false
 }
 
 func containsPlayer(players []Player, playerID string) bool {
@@ -215,6 +239,7 @@ func containsPlayer(players []Player, playerID string) bool {
 func snapshotRoom(room *roomEntity) *Room {
 	out := &Room{
 		ID:         room.ID,
+		Code:       room.Code,
 		HostID:     room.HostID,
 		Status:     room.Status,
 		Players:    append([]Player(nil), room.Players...),
@@ -240,4 +265,26 @@ func randomCode(length int) string {
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
+}
+
+func randomRoomCode(used map[string]string) string {
+	words := []string{
+		"apple", "beach", "bread", "cloud", "coffee", "dance", "dream", "earth", "flame", "forest",
+		"garden", "globe", "grape", "green", "happy", "honey", "hotel", "house", "island", "jelly",
+		"juice", "light", "lucky", "magic", "mango", "maple", "melon", "metal", "money", "moon",
+		"music", "night", "ocean", "olive", "party", "pearl", "piano", "pilot", "pizza", "plain",
+		"plant", "queen", "quick", "radio", "river", "robot", "salad", "scale", "sheep", "smile",
+		"snow", "sound", "spark", "spice", "sport", "star", "stone", "storm", "sugar", "sunny",
+		"sweet", "table", "tiger", "toast", "tower", "train", "tree", "union", "urban", "vivid",
+		"water", "whale", "white", "wind", "world", "yacht", "young", "zebra",
+	}
+
+	for i := 0; i < 256; i++ {
+		code := words[rand.Intn(len(words))]
+		if _, exists := used[code]; !exists {
+			return code
+		}
+	}
+
+	return "room" + strings.ToLower(randomCode(4))
 }
