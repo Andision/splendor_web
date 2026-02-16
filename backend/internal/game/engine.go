@@ -118,6 +118,14 @@ func (e *Engine) Apply(playerID string, action Action) error {
 		if err := e.applyTakeTokens(playerID, action.Payload.Colors); err != nil {
 			return err
 		}
+	case "adjust_tokens":
+		if err := e.applyAdjustTokens(playerID, action.Payload.Adjust); err != nil {
+			return err
+		}
+	case "discard_tokens":
+		if err := e.applyDiscardTokens(playerID, action.Payload.Colors); err != nil {
+			return err
+		}
 	case "reserve_card":
 		if err := e.applyReserveCard(playerID, action.Payload.CardID); err != nil {
 			return err
@@ -188,6 +196,97 @@ func (e *Engine) applyTakeTokens(playerID string, colors []string) error {
 	for _, c := range normalized {
 		e.state.Bank.Sub(c, 1)
 		p.Tokens.Add(c, 1)
+	}
+	return nil
+}
+
+func (e *Engine) applyDiscardTokens(playerID string, colors []string) error {
+	idx := e.playerIndex(playerID)
+	if idx == -1 {
+		return ErrInvalidAction
+	}
+	if len(colors) == 0 {
+		return fmt.Errorf("%w: colors is required", ErrInvalidAction)
+	}
+
+	allowed := append(append([]string(nil), ColoredGems...), GemGold)
+	counts := map[string]int{}
+	for _, c := range colors {
+		color := strings.ToLower(strings.TrimSpace(c))
+		if !slices.Contains(allowed, color) {
+			return fmt.Errorf("%w: unsupported gem color", ErrInvalidAction)
+		}
+		counts[color]++
+	}
+
+	p := &e.state.Players[idx]
+	for color, want := range counts {
+		if p.Tokens.Get(color) < want {
+			return fmt.Errorf("%w: not enough token to discard %s", ErrInvalidAction, color)
+		}
+	}
+
+	for color, giveBack := range counts {
+		p.Tokens.Sub(color, giveBack)
+		e.state.Bank.Add(color, giveBack)
+	}
+	return nil
+}
+
+func (e *Engine) applyAdjustTokens(playerID string, adjust map[string]int) error {
+	idx := e.playerIndex(playerID)
+	if idx == -1 {
+		return ErrInvalidAction
+	}
+	if len(adjust) == 0 {
+		return fmt.Errorf("%w: adjust is required", ErrInvalidAction)
+	}
+
+	allowed := append(append([]string(nil), ColoredGems...), GemGold)
+	p := &e.state.Players[idx]
+	net := 0
+
+	for color, delta := range adjust {
+		color = strings.ToLower(strings.TrimSpace(color))
+		if !slices.Contains(allowed, color) {
+			return fmt.Errorf("%w: unsupported gem color", ErrInvalidAction)
+		}
+		if delta == 0 {
+			continue
+		}
+		if color == GemGold && delta > 0 {
+			return fmt.Errorf("%w: cannot take gold directly", ErrInvalidAction)
+		}
+
+		if delta > 0 {
+			if e.state.Bank.Get(color) < delta {
+				return fmt.Errorf("%w: bank has no token for color %s", ErrInvalidAction, color)
+			}
+		} else {
+			need := -delta
+			if p.Tokens.Get(color) < need {
+				return fmt.Errorf("%w: not enough token to discard %s", ErrInvalidAction, color)
+			}
+		}
+		net += delta
+	}
+
+	if p.Tokens.Total()+net > 10 {
+		return fmt.Errorf("%w: token limit exceeded", ErrInvalidAction)
+	}
+
+	for color, delta := range adjust {
+		if delta == 0 {
+			continue
+		}
+		if delta > 0 {
+			e.state.Bank.Sub(color, delta)
+			p.Tokens.Add(color, delta)
+		} else {
+			back := -delta
+			p.Tokens.Sub(color, back)
+			e.state.Bank.Add(color, back)
+		}
 	}
 	return nil
 }

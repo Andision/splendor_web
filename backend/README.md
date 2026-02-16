@@ -8,6 +8,7 @@
 - 对局：房主开局、回合推进、终局判定
 - 动作校验：
   - `take_tokens`（拿 3 个不同色，或 2 个同色）
+  - `discard_tokens`（主动弃置任意数量代币回银行）
   - `reserve_card`（预留明牌，最多 3 张，尝试拿 1 金）
   - `buy_card`（购买明牌或预留牌，支持金代币补足）
   - `pass`
@@ -31,7 +32,8 @@
 ### 房间
 
 - `POST /api/rooms`
-  - body: `{ "hostName": "Alice" }`
+  - body: `{ "hostName": "Alice", "turnSeconds": 30 }`
+  - `turnSeconds` 可选，默认 `30`，允许范围 `5-300`
 - `GET /api/rooms/{roomId}`
 - `POST /api/rooms/{roomId}/join`
   - body: `{ "playerName": "Bob" }`

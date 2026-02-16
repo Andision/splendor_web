@@ -2,6 +2,7 @@ package lobby
 
 import (
 	"testing"
+	"time"
 
 	"splendor/backend/internal/game"
 )
@@ -9,7 +10,10 @@ import (
 func TestCreateJoinStartAndAction(t *testing.T) {
 	store := NewStore()
 
-	room := store.CreateRoom("host")
+	room, err := store.CreateRoom("host", 0)
+	if err != nil {
+		t.Fatalf("create room failed: %v", err)
+	}
 	if room.ID == "" {
 		t.Fatal("expected room id")
 	}
@@ -48,7 +52,10 @@ func TestCreateJoinStartAndAction(t *testing.T) {
 
 func TestOnlyHostCanStart(t *testing.T) {
 	store := NewStore()
-	room := store.CreateRoom("host")
+	room, err := store.CreateRoom("host", 0)
+	if err != nil {
+		t.Fatalf("create room failed: %v", err)
+	}
 	_, player, err := store.JoinRoom(room.ID, "friend")
 	if err != nil {
 		t.Fatalf("join failed: %v", err)
@@ -60,5 +67,40 @@ func TestOnlyHostCanStart(t *testing.T) {
 	}
 	if err != ErrOnlyHostCanStart {
 		t.Fatalf("expected ErrOnlyHostCanStart, got %v", err)
+	}
+}
+
+func TestProcessTimeoutsAutoPass(t *testing.T) {
+	store := NewStore()
+	room, err := store.CreateRoom("host", 5)
+	if err != nil {
+		t.Fatalf("create room failed: %v", err)
+	}
+	_, _, err = store.JoinRoom(room.ID, "friend")
+	if err != nil {
+		t.Fatalf("join room failed: %v", err)
+	}
+
+	started, err := store.StartGame(room.ID, room.HostID)
+	if err != nil {
+		t.Fatalf("start game failed: %v", err)
+	}
+	if started.Game == nil {
+		t.Fatal("expected game state")
+	}
+	initialPlayer := started.Game.CurrentPlayerID
+
+	if started.TurnDeadline == nil {
+		t.Fatal("expected turn deadline")
+	}
+	updates := store.ProcessTimeouts(started.TurnDeadline.Add(time.Second))
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 timeout update, got %d", len(updates))
+	}
+	if updates[0].Room.Game == nil {
+		t.Fatal("expected game in timeout snapshot")
+	}
+	if updates[0].Room.Game.CurrentPlayerID == initialPlayer {
+		t.Fatal("expected timeout to pass turn to next player")
 	}
 }

@@ -21,7 +21,7 @@ type App struct {
 }
 
 func New() *App {
-	return &App{
+	app := &App{
 		store: lobby.NewStore(),
 		hub:   ws.NewHub(),
 		upgrader: websocket.Upgrader{
@@ -32,6 +32,8 @@ func New() *App {
 			},
 		},
 	}
+	app.startTimeoutLoop()
+	return app
 }
 
 func (a *App) Routes() http.Handler {
@@ -51,7 +53,8 @@ func (a *App) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 type createRoomRequest struct {
-	HostName string `json:"hostName"`
+	HostName    string `json:"hostName"`
+	TurnSeconds int    `json:"turnSeconds,omitempty"`
 }
 
 type createRoomResponse struct {
@@ -75,7 +78,11 @@ func (a *App) handleRooms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	room := a.store.CreateRoom(req.HostName)
+	room, err := a.store.CreateRoom(req.HostName, req.TurnSeconds)
+	if err != nil {
+		writeLobbyError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, createRoomResponse{Room: room, Player: room.Players[0]})
 }
 
@@ -160,7 +167,7 @@ func (a *App) handleJoinRoom(w http.ResponseWriter, r *http.Request, roomID stri
 		return
 	}
 
-	a.broadcastRoomSnapshot(roomID, room, "player_joined")
+	a.broadcastRoomSnapshotRefs(room, "player_joined")
 	writeJSON(w, http.StatusOK, joinRoomResponse{Room: room, Player: player})
 }
 
@@ -181,7 +188,7 @@ func (a *App) handleStartGame(w http.ResponseWriter, r *http.Request, roomID str
 		return
 	}
 
-	a.broadcastRoomSnapshot(roomID, room, "game_started")
+	a.broadcastRoomSnapshotRefs(room, "game_started")
 	writeJSON(w, http.StatusOK, room)
 }
 
@@ -215,7 +222,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request, roomID string
 		return
 	}
 
-	a.broadcastRoomSnapshot(roomID, room, "action_applied")
+	a.broadcastRoomSnapshotRefs(room, "action_applied")
 	writeJSON(w, http.StatusOK, room)
 }
 
@@ -251,7 +258,7 @@ func (a *App) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		_ = a.store.SetConnected(roomID, playerID, false)
 		if latestRoom, e := a.store.GetRoom(roomID); e == nil {
-			a.broadcastRoomSnapshot(roomID, latestRoom, "player_disconnected")
+			a.broadcastRoomSnapshotRefs(latestRoom, "player_disconnected")
 		}
 	}()
 
@@ -264,7 +271,7 @@ func (a *App) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if latestRoom, e := a.store.GetRoom(roomID); e == nil {
-		a.broadcastRoomSnapshot(roomID, latestRoom, "player_connected")
+		a.broadcastRoomSnapshotRefs(latestRoom, "player_connected")
 	}
 
 	for {
@@ -283,7 +290,7 @@ func (a *App) handleWS(w http.ResponseWriter, r *http.Request) {
 				})
 				continue
 			}
-			a.broadcastRoomSnapshot(roomID, updatedRoom, "action_applied")
+			a.broadcastRoomSnapshotRefs(updatedRoom, "action_applied")
 		case "ping":
 			_ = conn.WriteJSON(map[string]any{"type": "pong"})
 		default:
@@ -301,6 +308,27 @@ func (a *App) broadcastRoomSnapshot(roomID string, room *lobby.Room, reason stri
 		"reason": reason,
 		"room":   room,
 	})
+}
+
+func (a *App) broadcastRoomSnapshotRefs(room *lobby.Room, reason string) {
+	a.broadcastRoomSnapshot(room.ID, room, reason)
+	if room.Code != "" && room.Code != room.ID {
+		a.broadcastRoomSnapshot(room.Code, room, reason)
+	}
+}
+
+func (a *App) startTimeoutLoop() {
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		for now := range ticker.C {
+			updates := a.store.ProcessTimeouts(now)
+			for _, update := range updates {
+				a.broadcastRoomSnapshotRefs(update.Room, "turn_timeout")
+			}
+		}
+	}()
 }
 
 type apiError struct {
@@ -322,6 +350,8 @@ func writeLobbyError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "player_duplicate", err.Error())
 	case errors.Is(err, lobby.ErrPlayerNotFound):
 		writeError(w, http.StatusNotFound, "player_not_found", err.Error())
+	case errors.Is(err, lobby.ErrInvalidTurnSeconds):
+		writeError(w, http.StatusBadRequest, "invalid_turn_seconds", err.Error())
 	case errors.Is(err, lobby.ErrOnlyHostCanStart):
 		writeError(w, http.StatusForbidden, "only_host_can_start", err.Error())
 	case errors.Is(err, lobby.ErrInvalidStartState), errors.Is(err, lobby.ErrGameAlreadyStarted), errors.Is(err, lobby.ErrGameNotStarted):

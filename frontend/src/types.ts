@@ -67,6 +67,8 @@ export type Room = {
   code: string;
   hostId: string;
   status: "waiting" | "playing" | "finished";
+  turnSeconds: number;
+  turnDeadline?: string;
   players: Player[];
   createdAt: string;
   startedAt?: string;
@@ -76,12 +78,13 @@ export type Room = {
 
 export type ActionPayload = {
   colors?: string[];
+  adjust?: Record<string, number>;
   cardId?: string;
   source?: "tableau" | "reserved";
 };
 
 export type GameAction = {
-  type: "take_tokens" | "reserve_card" | "buy_card" | "pass";
+  type: "take_tokens" | "discard_tokens" | "adjust_tokens" | "reserve_card" | "buy_card" | "pass";
   payload?: ActionPayload;
 };
 

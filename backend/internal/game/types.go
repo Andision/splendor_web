@@ -127,7 +127,8 @@ type Action struct {
 }
 
 type ActionInput struct {
-	Colors []string `json:"colors,omitempty"`
-	CardID string   `json:"cardId,omitempty"`
-	Source string   `json:"source,omitempty"`
+	Colors []string       `json:"colors,omitempty"`
+	Adjust map[string]int `json:"adjust,omitempty"`
+	CardID string         `json:"cardId,omitempty"`
+	Source string         `json:"source,omitempty"`
 }

@@ -15,6 +15,7 @@ var (
 	ErrRoomFull           = errors.New("room is full")
 	ErrPlayerDuplicate    = errors.New("player already in room")
 	ErrPlayerNotFound     = errors.New("player not found")
+	ErrInvalidTurnSeconds = errors.New("invalid turn seconds")
 	ErrOnlyHostCanStart   = errors.New("only host can start")
 	ErrInvalidStartState  = errors.New("cannot start game in current room state")
 	ErrGameNotStarted     = errors.New("game not started")
@@ -22,6 +23,7 @@ var (
 )
 
 const MaxPlayers = 4
+const DefaultTurnSeconds = 30
 
 type RoomStatus string
 
@@ -37,27 +39,35 @@ type Player struct {
 }
 
 type Room struct {
-	ID         string      `json:"id"`
-	Code       string      `json:"code"`
-	HostID     string      `json:"hostId"`
-	Status     RoomStatus  `json:"status"`
-	Players    []Player    `json:"players"`
-	CreatedAt  time.Time   `json:"createdAt"`
-	StartedAt  *time.Time  `json:"startedAt,omitempty"`
-	FinishedAt *time.Time  `json:"finishedAt,omitempty"`
-	Game       *game.State `json:"game,omitempty"`
+	ID          string      `json:"id"`
+	Code        string      `json:"code"`
+	HostID      string      `json:"hostId"`
+	Status      RoomStatus  `json:"status"`
+	TurnSeconds int         `json:"turnSeconds"`
+	TurnDeadline *time.Time `json:"turnDeadline,omitempty"`
+	Players     []Player    `json:"players"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	StartedAt   *time.Time  `json:"startedAt,omitempty"`
+	FinishedAt  *time.Time  `json:"finishedAt,omitempty"`
+	Game        *game.State `json:"game,omitempty"`
 }
 
 type roomEntity struct {
-	ID         string
-	Code       string
-	HostID     string
-	Status     RoomStatus
-	Players    []Player
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	Engine     *game.Engine
+	ID           string
+	Code         string
+	HostID       string
+	Status       RoomStatus
+	TurnSeconds  int
+	TurnDeadline *time.Time
+	Players      []Player
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+	Engine       *game.Engine
+}
+
+type TimeoutUpdate struct {
+	Room *Room
 }
 
 type Store struct {
@@ -73,7 +83,22 @@ func NewStore() *Store {
 	}
 }
 
-func (s *Store) CreateRoom(hostName string) *Room {
+func normalizeTurnSeconds(raw int) (int, error) {
+	if raw == 0 {
+		return DefaultTurnSeconds, nil
+	}
+	if raw < 5 || raw > 300 {
+		return 0, ErrInvalidTurnSeconds
+	}
+	return raw, nil
+}
+
+func (s *Store) CreateRoom(hostName string, turnSeconds int) (*Room, error) {
+	normalized, err := normalizeTurnSeconds(turnSeconds)
+	if err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -81,17 +106,18 @@ func (s *Store) CreateRoom(hostName string) *Room {
 	roomCode := randomRoomCode(s.codeToID)
 	host := Player{ID: randomCode(8), Name: strings.TrimSpace(hostName)}
 	room := &roomEntity{
-		ID:        roomID,
-		Code:      roomCode,
-		HostID:    host.ID,
-		Status:    RoomWaiting,
-		Players:   []Player{host},
-		CreatedAt: time.Now().UTC(),
+		ID:          roomID,
+		Code:        roomCode,
+		HostID:      host.ID,
+		Status:      RoomWaiting,
+		TurnSeconds: normalized,
+		Players:     []Player{host},
+		CreatedAt:   time.Now().UTC(),
 	}
 
 	s.rooms[roomID] = room
 	s.codeToID[roomCode] = roomID
-	return snapshotRoom(room)
+	return snapshotRoom(room), nil
 }
 
 func (s *Store) JoinRoom(roomRef, playerName string) (*Room, Player, error) {
@@ -153,6 +179,7 @@ func (s *Store) StartGame(roomRef, playerID string) (*Room, error) {
 	room.Engine = engine
 	room.StartedAt = &now
 	room.Status = RoomPlaying
+	room.TurnDeadline = ptrTime(now.Add(time.Duration(room.TurnSeconds) * time.Second))
 	return snapshotRoom(room), nil
 }
 
@@ -180,9 +207,52 @@ func (s *Store) ApplyAction(roomRef, playerID string, action game.Action) (*Room
 		now := time.Now().UTC()
 		room.Status = RoomFinished
 		room.FinishedAt = &now
+		room.TurnDeadline = nil
+	} else {
+		now := time.Now().UTC()
+		room.TurnDeadline = ptrTime(now.Add(time.Duration(room.TurnSeconds) * time.Second))
 	}
 
 	return snapshotRoom(room), nil
+}
+
+func (s *Store) ProcessTimeouts(now time.Time) []TimeoutUpdate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	updates := make([]TimeoutUpdate, 0)
+	now = now.UTC()
+
+	for _, room := range s.rooms {
+		if room.Status != RoomPlaying || room.Engine == nil || room.TurnDeadline == nil {
+			continue
+		}
+		if room.TurnDeadline.After(now) {
+			continue
+		}
+
+		snapshot := room.Engine.Snapshot()
+		currentPlayerID := snapshot.CurrentPlayerID
+		if currentPlayerID == "" {
+			continue
+		}
+		if err := room.Engine.Apply(currentPlayerID, game.Action{Type: "pass"}); err != nil {
+			continue
+		}
+
+		updated := room.Engine.Snapshot()
+		if updated.Status == game.StatusFinished {
+			room.Status = RoomFinished
+			room.FinishedAt = &now
+			room.TurnDeadline = nil
+		} else {
+			room.TurnDeadline = ptrTime(now.Add(time.Duration(room.TurnSeconds) * time.Second))
+		}
+
+		updates = append(updates, TimeoutUpdate{Room: snapshotRoom(room)})
+	}
+
+	return updates
 }
 
 func (s *Store) SetConnected(roomRef, playerID string, connected bool) error {
@@ -238,20 +308,27 @@ func containsPlayer(players []Player, playerID string) bool {
 
 func snapshotRoom(room *roomEntity) *Room {
 	out := &Room{
-		ID:         room.ID,
-		Code:       room.Code,
-		HostID:     room.HostID,
-		Status:     room.Status,
-		Players:    append([]Player(nil), room.Players...),
-		CreatedAt:  room.CreatedAt,
-		StartedAt:  room.StartedAt,
-		FinishedAt: room.FinishedAt,
+		ID:           room.ID,
+		Code:         room.Code,
+		HostID:       room.HostID,
+		Status:       room.Status,
+		TurnSeconds:  room.TurnSeconds,
+		TurnDeadline: room.TurnDeadline,
+		Players:      append([]Player(nil), room.Players...),
+		CreatedAt:    room.CreatedAt,
+		StartedAt:    room.StartedAt,
+		FinishedAt:   room.FinishedAt,
 	}
 	if room.Engine != nil {
 		s := room.Engine.Snapshot()
 		out.Game = &s
 	}
 	return out
+}
+
+func ptrTime(t time.Time) *time.Time {
+	v := t.UTC()
+	return &v
 }
 
 func randomCode(length int) string {

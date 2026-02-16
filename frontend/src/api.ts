@@ -54,10 +54,10 @@ export type JoinRoomResult = {
   };
 };
 
-export function createRoom(hostName: string): Promise<CreateRoomResult> {
+export function createRoom(hostName: string, turnSeconds: number): Promise<CreateRoomResult> {
   return request<CreateRoomResult>("/api/rooms", {
     method: "POST",
-    body: JSON.stringify({ hostName })
+    body: JSON.stringify({ hostName, turnSeconds })
   });
 }
 
