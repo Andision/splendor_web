@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# frontend
+frontend/node_modules
+frontend/dist
+
+# backend
+backend/bin
+backend/coverage.out
+
+# misc
+.env
