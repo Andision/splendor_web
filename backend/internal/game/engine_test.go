@@ -44,6 +44,51 @@ func TestTakeTokensAndTurnSwitch(t *testing.T) {
 	}
 }
 
+func TestTakeSingleTokenAllowed(t *testing.T) {
+	engine, err := New([]Seat{{ID: "p1", Name: "A"}, {ID: "p2", Name: "B"}})
+	if err != nil {
+		t.Fatalf("new game failed: %v", err)
+	}
+
+	beforeWhite := engine.state.Bank.White
+	err = engine.Apply("p1", Action{Type: "take_tokens", Payload: ActionInput{Colors: []string{"white"}}})
+	if err != nil {
+		t.Fatalf("single take failed: %v", err)
+	}
+
+	s := engine.Snapshot()
+	p1 := s.Players[0]
+	if p1.Tokens.White != 1 {
+		t.Fatalf("expected 1 white token, got %+v", p1.Tokens)
+	}
+	if s.Bank.White != beforeWhite-1 {
+		t.Fatalf("expected bank white %d, got %d", beforeWhite-1, s.Bank.White)
+	}
+}
+
+func TestTakeTwoDifferentTokensAllowed(t *testing.T) {
+	engine, err := New([]Seat{{ID: "p1", Name: "A"}, {ID: "p2", Name: "B"}})
+	if err != nil {
+		t.Fatalf("new game failed: %v", err)
+	}
+
+	beforeWhite := engine.state.Bank.White
+	beforeBlue := engine.state.Bank.Blue
+	err = engine.Apply("p1", Action{Type: "take_tokens", Payload: ActionInput{Colors: []string{"white", "blue"}}})
+	if err != nil {
+		t.Fatalf("take two different failed: %v", err)
+	}
+
+	s := engine.Snapshot()
+	p1 := s.Players[0]
+	if p1.Tokens.White != 1 || p1.Tokens.Blue != 1 {
+		t.Fatalf("unexpected tokens after take: %+v", p1.Tokens)
+	}
+	if s.Bank.White != beforeWhite-1 || s.Bank.Blue != beforeBlue-1 {
+		t.Fatalf("unexpected bank after take: %+v", s.Bank)
+	}
+}
+
 func TestNotPlayerTurn(t *testing.T) {
 	engine, err := New([]Seat{{ID: "p1", Name: "A"}, {ID: "p2", Name: "B"}})
 	if err != nil {

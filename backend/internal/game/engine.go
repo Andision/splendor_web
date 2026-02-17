@@ -178,8 +178,8 @@ func (e *Engine) applyTakeTokens(playerID string, colors []string) error {
 		return nil
 	}
 
-	if len(normalized) != 3 {
-		return fmt.Errorf("%w: take must be 3 different or 2 same", ErrInvalidAction)
+	if len(normalized) > 3 {
+		return fmt.Errorf("%w: take supports up to 3 different colors, or exactly 2 same", ErrInvalidAction)
 	}
 
 	seen := map[string]struct{}{}

@@ -60,6 +60,9 @@ function tokenParts(tokenSet: Record<string, number>): Array<{ color: string; am
 }
 
 export default function App() {
+  const STAGE_WIDTH = 1600;
+  const STAGE_HEIGHT = 1000;
+  const STAGE_PADDING = 16;
   const [hostName, setHostName] = useState("Alice");
   const [createTurnSeconds, setCreateTurnSeconds] = useState(30);
   const [joinName, setJoinName] = useState("Bob");
@@ -77,6 +80,7 @@ export default function App() {
     black: 0,
     gold: 0
   });
+  const [stageScale, setStageScale] = useState(1);
   const [turnCountdown, setTurnCountdown] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const roomRef = useRef<Room | null>(null);
@@ -135,6 +139,14 @@ export default function App() {
     return `W${player.tokens.white} B${player.tokens.blue} G${player.tokens.green} R${player.tokens.red} K${player.tokens.black} Gd${player.tokens.gold}`;
   }
 
+  function totalTokens(player: PlayerState): number {
+    return player.tokens.white + player.tokens.blue + player.tokens.green + player.tokens.red + player.tokens.black + player.tokens.gold;
+  }
+
+  function totalCards(player: PlayerState): number {
+    return player.purchasedCount + (player.nobles?.length ?? 0);
+  }
+
   function applySnapshotLog(nextRoom: Room, reason: string) {
     const prevRoom = roomRef.current;
 
@@ -170,6 +182,18 @@ export default function App() {
       appendLog(`Turn ${nextRoom.game.turn} -> ${current?.name ?? shortId(nextRoom.game.currentPlayerId ?? "")}`);
     }
   }
+
+  useEffect(() => {
+    const updateStageScale = () => {
+      const availWidth = Math.max(window.innerWidth - STAGE_PADDING, 320);
+      const availHeight = Math.max(window.innerHeight - STAGE_PADDING, 180);
+      const nextScale = Math.min(availWidth / STAGE_WIDTH, availHeight / STAGE_HEIGHT);
+      setStageScale(Number.isFinite(nextScale) && nextScale > 0 ? nextScale : 1);
+    };
+    updateStageScale();
+    window.addEventListener("resize", updateStageScale);
+    return () => window.removeEventListener("resize", updateStageScale);
+  }, []);
 
   useEffect(() => {
     roomRef.current = room;
@@ -491,213 +515,219 @@ export default function App() {
   }
 
   return (
-    <div className="page">
-      <div className="toast-stack">
-        {toasts.map((toast) => (
-          <button key={toast.id} className="toast-error" onClick={() => dismissToast(toast.id)} title="Click to dismiss">
-            {toast.text}
-          </button>
-        ))}
-      </div>
-      <motion.header className="hero" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-        <h1>Splendor Multiplayer</h1>
-      </motion.header>
+    <div className="viewport">
+      <div className="page" style={{ "--stage-scale": String(stageScale) } as CSSProperties}>
+        <div className="toast-stack">
+          {toasts.map((toast) => (
+            <button key={toast.id} className="toast-error" onClick={() => dismissToast(toast.id)} title="Click to dismiss">
+              {toast.text}
+            </button>
+          ))}
+        </div>
+        <motion.header className="hero" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+          <h1>Splendor Multiplayer</h1>
+        </motion.header>
 
-      {!session ? (
-        <section className="panel grid-two">
-          <div>
-            <h2>Create Room</h2>
-            <input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="Host name" />
-            <input
-              type="number"
-              min={5}
-              max={300}
-              value={createTurnSeconds}
-              onChange={(e) => setCreateTurnSeconds(Number(e.target.value))}
-              placeholder="Turn seconds"
-            />
-            <button onClick={onCreateRoom}>Create</button>
-          </div>
-          <div>
-            <h2>Join Room</h2>
-            <input value={joinRoomId} onChange={(e) => setJoinRoomId(e.target.value)} placeholder="Room ID" />
-            <input value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="Player name" />
-            <button onClick={onJoinRoom}>Join</button>
-          </div>
-        </section>
-      ) : (
-        <>
-          {!room ? (
-            <section className="panel waiting-panel">
-              <h3>Loading Room</h3>
-              <p className="status">Restoring room state...</p>
-            </section>
-          ) : room.game ? (
-            <section className="game-frame">
-              <div className="left-sidebar">
-                <article className="panel room-panel">
-                  <h3>Room Info</h3>
-                  <p>Room: {room.code ?? room.id}</p>
-                  <p>Status: {room.status}</p>
-                  <p>You: {session.playerName}</p>
-                  <p>Your ID: {shortId(session.playerId)}</p>
-                  <p>Players: {room.players.length}</p>
-                  <p>Turn Seconds: {room.turnSeconds}</p>
-                  <p>Live: {statusText}</p>
-                  <div className="room-actions">
-                    <button onClick={onRefreshRoom}>Refresh</button>
-                    {isHost && room?.status === "waiting" && (
-                      <button onClick={onStartGame} disabled={!canStart} title={canStart ? "Start game" : "Need at least 2 players"}>
-                        Start
-                      </button>
-                    )}
-                    <button onClick={goHome}>Back Home</button>
-                  </div>
-                  {room?.status === "waiting" && room.players.length < 2 && <p className="hint">Need at least 2 players to start.</p>}
-                </article>
-
-                <article className="panel log-panel">
-                  <h3>Event Log</h3>
-                  <div className="event-log">
-                    <AnimatePresence>
-                      {eventLog.map((line, index) => (
-                        <motion.p key={`${line}-${index}`} initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
-                          {line}
-                        </motion.p>
-                      ))}
-                    </AnimatePresence>
-                  </div>
-                </article>
-              </div>
-
-              <div className="cards-column">
-                <article className="panel cards-panel">
-                  <h3>Cards</h3>
-                  <div className="nobles-row">
-                    <h4>Nobles</h4>
-                    <div className="nobles">{(room.game.nobles ?? []).map((noble) => renderNoble(noble))}</div>
-                  </div>
-                  <div className="tiers">
-                    <article>
-                      <h4>Tier 1 ({room.game.deck1Count ?? 0})</h4>
-                      <div className="cards">{(room.game.tier1 ?? []).map((card) => renderCard(card))}</div>
-                    </article>
-                    <article>
-                      <h4>Tier 2 ({room.game.deck2Count ?? 0})</h4>
-                      <div className="cards">{(room.game.tier2 ?? []).map((card) => renderCard(card))}</div>
-                    </article>
-                    <article>
-                      <h4>Tier 3 ({room.game.deck3Count ?? 0})</h4>
-                      <div className="cards">{(room.game.tier3 ?? []).map((card) => renderCard(card))}</div>
-                    </article>
-                  </div>
-                </article>
-              </div>
-
-              <div className="right-column">
-                <article className="panel tokens-panel">
-                  <div className="turn-inline">
-                    <span>Turn {room.game.turn}</span>
-                    <span>Current: {currentPlayerName}</span>
-                    <span>Timer: {turnCountdown}s / {room.turnSeconds}s</span>
-                    {room.game.finalRound && <span className="final-round-inline">Final round: {room.game.finalTurnsLeft}</span>}
-                  </div>
-
-                  <div className="token-picker">
-                    {TOKEN_ACTION_COLORS.map((color) => (
-                      <div key={`picker-${color}`} className="token-picker-item">
-                        <div className={`token-coin ${color}`}>
-                          <span className="token-coin-badge">{room.game?.bank[color as keyof typeof room.game.bank] ?? 0}</span>
-                        </div>
-                        {color !== "gold" && (
-                          <div className="token-adjust">
-                            <button onClick={() => adjustTokenDraft(color, -1)}>−</button>
-                            <span>{tokenDraft[color] ?? 0}</span>
-                            <button onClick={() => adjustTokenDraft(color, 1)}>+</button>
-                          </div>
-                        )}
-                        {color === "gold" && <div className="token-adjust-placeholder" />}
-                      </div>
-                    ))}
-                    <div className="token-picker-actions">
-                      <button onClick={() => void submitTokenDraft()}>Submit Selection</button>
-                      <button
-                        onClick={() => setTokenDraft({ white: 0, blue: 0, green: 0, red: 0, black: 0, gold: 0 })}
-                      >
-                        Clear
-                      </button>
-                      <button onClick={() => void submitAction({ type: "pass" })}>Pass</button>
+        {!session ? (
+          <section className="panel grid-two">
+            <div>
+              <h2>Create Room</h2>
+              <input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="Host name" />
+              <input
+                type="number"
+                min={5}
+                max={300}
+                value={createTurnSeconds}
+                onChange={(e) => setCreateTurnSeconds(Number(e.target.value))}
+                placeholder="Turn seconds"
+              />
+              <button onClick={onCreateRoom}>Create</button>
+            </div>
+            <div>
+              <h2>Join Room</h2>
+              <input value={joinRoomId} onChange={(e) => setJoinRoomId(e.target.value)} placeholder="Room ID" />
+              <input value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="Player name" />
+              <button onClick={onJoinRoom}>Join</button>
+            </div>
+          </section>
+        ) : (
+          <>
+            {!room ? (
+              <section className="panel waiting-panel">
+                <h3>Loading Room</h3>
+                <p className="status">Restoring room state...</p>
+              </section>
+            ) : room.game ? (
+              <section className="game-frame">
+                <div className="left-sidebar">
+                  <article className="panel room-panel">
+                    <h3>Room Info</h3>
+                    <p>Room: {room.code ?? room.id}</p>
+                    <p>Status: {room.status}</p>
+                    <p>You: {session.playerName}</p>
+                    <p>Your ID: {shortId(session.playerId)}</p>
+                    <p>Players: {room.players.length}</p>
+                    <p>Turn Seconds: {room.turnSeconds}</p>
+                    <p>Live: {statusText}</p>
+                    <div className="room-actions">
+                      <button onClick={onRefreshRoom}>Refresh</button>
+                      {isHost && room?.status === "waiting" && (
+                        <button onClick={onStartGame} disabled={!canStart} title={canStart ? "Start game" : "Need at least 2 players"}>
+                          Start
+                        </button>
+                      )}
+                      <button onClick={goHome}>Back Home</button>
                     </div>
-                  </div>
-                </article>
+                    {room?.status === "waiting" && room.players.length < 2 && <p className="hint">Need at least 2 players to start.</p>}
+                  </article>
 
-                <article className="panel players-panel">
-                  <div className="player-board-grid">
-                    {(room.game.players ?? []).map((player) => (
-                      <div key={player.id} className={`player-board-card ${room.game?.currentPlayerId === player.id ? "is-current-turn" : ""}`}>
-                        <div className="player-board-content">
-                          <div className="player-info-main">
-                            <div className="player-board-head">
-                              <strong>{player.name}</strong>
-                              <span>{player.isConnected ? "Online" : "Offline"}</span>
+                  <article className="panel log-panel">
+                    <h3>Event Log</h3>
+                    <div className="event-log">
+                      <AnimatePresence>
+                        {eventLog.map((line, index) => (
+                          <motion.p key={`${line}-${index}`} initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
+                            {line}
+                          </motion.p>
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  </article>
+                </div>
+
+                <div className="cards-column">
+                  <article className="panel cards-panel">
+                    <h3>Cards</h3>
+                    <div className="nobles-row">
+                      <h4>Nobles</h4>
+                      <div className="nobles">{(room.game.nobles ?? []).map((noble) => renderNoble(noble))}</div>
+                    </div>
+                    <div className="tiers">
+                      <article>
+                        <h4>Tier 1 ({room.game.deck1Count ?? 0})</h4>
+                        <div className="cards">{(room.game.tier1 ?? []).map((card) => renderCard(card))}</div>
+                      </article>
+                      <article>
+                        <h4>Tier 2 ({room.game.deck2Count ?? 0})</h4>
+                        <div className="cards">{(room.game.tier2 ?? []).map((card) => renderCard(card))}</div>
+                      </article>
+                      <article>
+                        <h4>Tier 3 ({room.game.deck3Count ?? 0})</h4>
+                        <div className="cards">{(room.game.tier3 ?? []).map((card) => renderCard(card))}</div>
+                      </article>
+                    </div>
+                  </article>
+                </div>
+
+                <div className="right-column">
+                  <article className="panel tokens-panel">
+                    <div className="turn-inline">
+                      <span>Turn {room.game.turn}</span>
+                      <span>Current: {currentPlayerName}</span>
+                      <span>Timer: {turnCountdown}s / {room.turnSeconds}s</span>
+                      {room.game.finalRound && <span className="final-round-inline">Final round: {room.game.finalTurnsLeft}</span>}
+                    </div>
+
+                    <div className="token-picker">
+                      {TOKEN_ACTION_COLORS.map((color) => (
+                        <div key={`picker-${color}`} className="token-picker-item">
+                          <div className={`token-coin ${color}`}>
+                            <span className="token-coin-badge">{room.game?.bank[color as keyof typeof room.game.bank] ?? 0}</span>
+                          </div>
+                          {color !== "gold" && (
+                            <div className="token-adjust">
+                              <button onClick={() => adjustTokenDraft(color, -1)}>−</button>
+                              <span>{tokenDraft[color] ?? 0}</span>
+                              <button onClick={() => adjustTokenDraft(color, 1)}>+</button>
                             </div>
-                            <p className="player-meta">P: {player.points} | Cards: {player.purchasedCount}</p>
-                            <div className="player-gem-stats">
-                              {PLAYER_STAT_COLORS.map((color) => (
-                                <div key={`${player.id}-${color}`} className={`player-gem-box ${color}`}>
-                                  <strong>
-                                    {player.tokens[color as keyof typeof player.tokens]}/{player.bonuses[color as keyof typeof player.bonuses]}
-                                  </strong>
-                                  <small>T/B</small>
+                          )}
+                          {color === "gold" && <div className="token-adjust-placeholder" />}
+                        </div>
+                      ))}
+                      <div className="token-picker-actions">
+                        <button onClick={() => void submitTokenDraft()}>Submit Selection</button>
+                        <button
+                          onClick={() => setTokenDraft({ white: 0, blue: 0, green: 0, red: 0, black: 0, gold: 0 })}
+                        >
+                          Clear
+                        </button>
+                        <button onClick={() => void submitAction({ type: "pass" })}>Pass</button>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article className="panel players-panel">
+                    <div className="player-board-grid">
+                      {(room.game.players ?? []).map((player) => (
+                        <div key={player.id} className={`player-board-card ${room.game?.currentPlayerId === player.id ? "is-current-turn" : ""}`}>
+                          <div className="player-board-content">
+                            <div className="player-info-main">
+                              <div className="player-board-head">
+                                <strong>{player.name}</strong>
+                                <span>{player.isConnected ? "Online" : "Offline"}</span>
+                              </div>
+                              <div className="player-summary-stats">
+                                <span>Score: {player.points}</span>
+                                <span>Tokens: {totalTokens(player)}</span>
+                                <span>Cards: {totalCards(player)}</span>
+                              </div>
+                              <div className="player-gem-stats">
+                                {PLAYER_STAT_COLORS.map((color) => (
+                                  <div key={`${player.id}-${color}`} className={`player-gem-box ${color}`}>
+                                    <strong>
+                                      {player.tokens[color as keyof typeof player.tokens]}/{player.bonuses[color as keyof typeof player.bonuses]}
+                                    </strong>
+                                    <small>T/B</small>
+                                  </div>
+                                ))}
+                                <div className="player-gem-box gold">
+                                  <strong>{player.tokens.gold}</strong>
+                                  <small>Gold</small>
                                 </div>
-                              ))}
-                              <div className="player-gem-box gold">
-                                <strong>{player.tokens.gold}</strong>
-                                <small>Gold</small>
                               </div>
                             </div>
+                            <aside className="player-reserved-side">
+                              <p className="reserved-side-title">Reserved {(player.reserved ?? []).length}/3</p>
+                              {(player.reserved ?? []).length > 0 ? (
+                                <div className="reserved-mini-list">{(player.reserved ?? []).map((card) => renderReservedMini(card, player.id))}</div>
+                              ) : (
+                                <p className="reserved-empty-inline">None</p>
+                              )}
+                            </aside>
                           </div>
-                          <aside className="player-reserved-side">
-                            <p className="reserved-side-title">Reserved {(player.reserved ?? []).length}/3</p>
-                            {(player.reserved ?? []).length > 0 ? (
-                              <div className="reserved-mini-list">{(player.reserved ?? []).map((card) => renderReservedMini(card, player.id))}</div>
-                            ) : (
-                              <p className="reserved-empty-inline">None</p>
-                            )}
-                          </aside>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-              </div>
-            </section>
-          ) : (
-            <section className="panel waiting-panel">
-              <h3>Waiting Room</h3>
-              <p>Room ID: {room.code ?? room.id}</p>
-              <p>Turn Seconds: {room.turnSeconds}</p>
-              <div className="room-actions">
-                <button onClick={onRefreshRoom}>Refresh</button>
-                {isHost && room?.status === "waiting" && (
-                  <button onClick={onStartGame} disabled={!canStart} title={canStart ? "Start game" : "Need at least 2 players"}>
-                    Start Game
-                  </button>
-                )}
-                <button onClick={goHome}>Back Home</button>
-              </div>
-              <p className="status">{statusText}</p>
-              <div className="player-list">
-                {room?.players.map((p) => (
-                  <span className="player-chip" key={p.id}>
-                    {p.name}
-                  </span>
-                ))}
-              </div>
-            </section>
-          )}
-        </>
-      )}
+                      ))}
+                    </div>
+                  </article>
+                </div>
+              </section>
+            ) : (
+              <section className="panel waiting-panel">
+                <h3>Waiting Room</h3>
+                <p>Room ID: {room.code ?? room.id}</p>
+                <p>Turn Seconds: {room.turnSeconds}</p>
+                <div className="room-actions">
+                  <button onClick={onRefreshRoom}>Refresh</button>
+                  {isHost && room?.status === "waiting" && (
+                    <button onClick={onStartGame} disabled={!canStart} title={canStart ? "Start game" : "Need at least 2 players"}>
+                      Start Game
+                    </button>
+                  )}
+                  <button onClick={goHome}>Back Home</button>
+                </div>
+                <p className="status">{statusText}</p>
+                <div className="player-list">
+                  {room?.players.map((p) => (
+                    <span className="player-chip" key={p.id}>
+                      {p.name}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
